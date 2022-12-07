@@ -71,15 +71,19 @@ func (h *Haystack) syncPile(tx *bbolt.Tx) (err error) {
 	}
 	return nil
 }
-func (h *Haystack) getBlob(tx *bbolt.Tx, key []byte) ([]byte, error) {
-	if err := h.syncPile(tx); err != nil {
+func (h *Haystack) getBlob(key []byte) ([]byte, error) {
+	idxNeedle := &IndexNeedle{}
+	var res []byte
+	err := h.db.View(func(tx *bbolt.Tx) error {
+		res = tx.Bucket(haystackIndexBucket).Get(key)
+		if len(res) == 0 {
+			return fmt.Errorf("blob not found")
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	res := tx.Bucket(haystackIndexBucket).Get(key)
-	if len(res) == 0 {
-		return nil, fmt.Errorf("blob not found")
-	}
-	idxNeedle := &IndexNeedle{}
 	if err := binary.Read(bytes.NewBuffer(res), binary.LittleEndian, idxNeedle); err != nil {
 		return nil, err
 	}
