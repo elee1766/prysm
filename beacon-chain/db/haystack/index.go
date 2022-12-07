@@ -61,12 +61,39 @@ func (h *Haystack) syncPile(tx *bbolt.Tx) (err error) {
 	h.currentPile.name = binary.LittleEndian.Uint64(tx.Bucket(haystackMetaBucket).Get([]byte("current_pile_idx")))
 	h.currentPile.dataCur = binary.LittleEndian.Uint64(tx.Bucket(haystackMetaBucket).Get([]byte("current_pile_cur")))
 	if h.currentPile.fs == nil || (h.currentPile.name > 0 && lastname != h.currentPile.name) {
+		if h.currentPile.fs != nil {
+			h.currentPile.fs.Close()
+		}
 		h.currentPile.fs, err = h.fs.Open(fmt.Sprintf("blobs/%d.pile", h.currentPile))
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+func (h *Haystack) getBlob(tx *bbolt.Tx, key []byte) ([]byte, error) {
+	if err := h.syncPile(tx); err != nil {
+		return nil, err
+	}
+	res := tx.Bucket(haystackIndexBucket).Get(key)
+	if len(res) == 0 {
+		return nil, fmt.Errorf("blob not found")
+	}
+	idxNeedle := &IndexNeedle{}
+	if err := binary.Read(bytes.NewBuffer(res), binary.LittleEndian, idxNeedle); err != nil {
+		return nil, err
+	}
+	file, err := h.fs.Open(fmt.Sprintf("blobs/%d.pile", idxNeedle.Pile))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	//TODO: bunch of validation
+	blobNeedle, err := FindNeedle(file, idxNeedle)
+	if err != nil {
+		return nil, err
+	}
+	return blobNeedle.Data, nil
 }
 
 func (h *Haystack) addBlob(tx *bbolt.Tx, key []byte, data []byte) error {

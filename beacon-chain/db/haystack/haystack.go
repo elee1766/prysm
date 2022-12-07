@@ -34,7 +34,7 @@ type BlobNeedle struct {
 	Checksum  int64
 }
 
-func FindNeedle(ctx context.Context, pile io.ReadSeeker, loc *IndexNeedle) (*BlobNeedle, error) {
+func FindNeedle(pile io.ReadSeeker, loc *IndexNeedle) (*BlobNeedle, error) {
 	n := &BlobNeedle{}
 	_, err := pile.Seek(loc.Offset, io.SeekStart)
 	if err != nil {
