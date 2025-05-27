@@ -60,6 +60,7 @@ type ValidatorService struct {
 	logValidatorPerformance bool
 	distributed             bool
 	disableDutiesPolling    bool
+	onRunnerExit            func()
 }
 
 // Config for the validator service.
@@ -87,6 +88,7 @@ type Config struct {
 	EmitAccountMetrics      bool
 	Distributed             bool
 	DisableDutiesPolling    bool
+	OnRunnerExit            func()
 }
 
 // NewValidatorService creates a new validator service for the service
@@ -111,6 +113,7 @@ func NewValidatorService(ctx context.Context, cfg *Config) (*ValidatorService, e
 		logValidatorPerformance: cfg.LogValidatorPerformance,
 		distributed:             cfg.Distributed,
 		disableDutiesPolling:    cfg.DisableDutiesPolling,
+		onRunnerExit:            cfg.OnRunnerExit,
 	}
 
 	dialOpts := ConstructDialOptions(
@@ -226,7 +229,20 @@ func (v *ValidatorService) Start() {
 	}
 
 	v.validator = valStruct
-	go run(v.ctx, v.validator)
+	
+	// Start the validator routine and wait for it to exit
+	done := run(v.ctx, v.validator)
+	go func() {
+		<-done
+		// Validator routine has exited, call Done() for cleanup
+		if v.validator != nil {
+			v.validator.Done()
+		}
+		// Call the onRunnerExit callback if provided
+		if v.onRunnerExit != nil {
+			v.onRunnerExit()
+		}
+	}()
 }
 
 // Stop the validator service.
