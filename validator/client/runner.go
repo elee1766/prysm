@@ -202,7 +202,11 @@ func run(ctx context.Context, v iface.Validator) <-chan struct{} {
 	r, err := newRunner(ctx, v)
 	if err != nil {
 		// newRunner already calls v.Done() on error
-		log.WithError(err).Fatal("Failed to initialize runner")
+		log.WithError(err).Error("Failed to initialize runner")
+		// Return a closed channel to signal immediate completion
+		done := make(chan struct{})
+		close(done)
+		return done
 	}
 	return r.run(ctx)
 }
