@@ -25,24 +25,25 @@ import (
 // Time to wait before trying to reconnect with beacon node.
 var backOffPeriod = 10 * time.Second
 
-// Run the main validator routine. This routine exits if the context is
-// canceled.
+// runner encapsulates the main validator routine.
+type runner struct {
+	validator iface.Validator
+}
+
+// newRunner creates a new runner instance and performs all necessary initialization.
+// This function can return an error if initialization fails.
 //
 // Order of operations:
 // 1 - Initialize validator data
 // 2 - Wait for validator activation
-// 3 - Wait for the next slot start
-// 4 - Update assignments
-// 5 - Determine role at current slot
-// 6 - Perform assigned role, if any
-func run(ctx context.Context, v iface.Validator) {
-	cleanup := v.Done
-	defer cleanup()
-
+func newRunner(ctx context.Context, v iface.Validator) (*runner, error) {
+	// Initialize validator and get head slot
 	headSlot, err := initializeValidatorAndGetHeadSlot(ctx, v)
 	if err != nil {
-		return // Exit if context is canceled.
+		return nil, err
 	}
+	
+	// Prepare initial duties update
 	ss, err := slots.EpochStart(slots.ToEpoch(headSlot + 1))
 	if err != nil {
 		log.WithError(err).Error("Failed to get epoch start")
@@ -50,14 +51,13 @@ func run(ctx context.Context, v iface.Validator) {
 	}
 	startDeadline := v.SlotDeadline(ss + params.BeaconConfig().SlotsPerEpoch - 1)
 	startCtx, startCancel := context.WithDeadline(ctx, startDeadline)
+	defer startCancel()
+	
 	if err := v.UpdateDuties(startCtx); err != nil {
 		handleAssignmentError(err, headSlot)
+		// Don't return error here, just log it
 	}
-	startCancel()
-	eventsChan := make(chan *event.Event, 1)
-	healthTracker := v.HealthTracker()
-	runHealthCheckRoutine(ctx, v, eventsChan)
-
+	
 	// check if proposer settings is still nil
 	// Set properties on the beacon node like the fee recipient for validators that are being used & active.
 	if v.ProposerSettings() == nil {
@@ -65,19 +65,41 @@ func run(ctx context.Context, v iface.Validator) {
 			" and will continue to use settings provided in the beacon node.")
 	}
 	if err := v.PushProposerSettings(ctx, headSlot, true); err != nil {
-		log.WithError(err).Fatal("Failed to update proposer settings")
+		return nil, errors.Wrap(err, "failed to update proposer settings")
 	}
+	
+	return &runner{
+		validator: v,
+	}, nil
+}
+
+// run executes the main validator routine. This routine exits if the context is
+// canceled.
+//
+// Order of operations:
+// 1 - Wait for the next slot start
+// 2 - Update assignments if needed
+// 3 - Determine role at current slot
+// 4 - Perform assigned role, if any
+func (r *runner) run(ctx context.Context) {
+	cleanup := r.validator.Done
+	defer cleanup()
+	
+	eventsChan := make(chan *event.Event, 1)
+	healthTracker := r.validator.HealthTracker()
+	runHealthCheckRoutine(ctx, r.validator, eventsChan)
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("Context canceled, stopping validator")
 			return // Exit if context is canceled.
-		case slot := <-v.NextSlot():
+		case slot := <-r.validator.NextSlot():
 			if !healthTracker.IsHealthy(ctx) {
 				continue
 			}
 
-			deadline := v.SlotDeadline(slot)
+			deadline := r.validator.SlotDeadline(slot)
 			slotCtx, cancel := context.WithDeadline(ctx, deadline)
 
 			var span trace.Span
@@ -90,9 +112,9 @@ func run(ctx context.Context, v iface.Validator) {
 			// Keep trying to update assignments if they are nil or if we are past an
 			// epoch transition in the beacon node's state.
 			if slots.IsEpochStart(slot) {
-				deadline = v.SlotDeadline(slot + params.BeaconConfig().SlotsPerEpoch - 1)
+				deadline = r.validator.SlotDeadline(slot + params.BeaconConfig().SlotsPerEpoch - 1)
 				dutiesCtx, dutiesCancel := context.WithDeadline(ctx, deadline)
-				if err := v.UpdateDuties(dutiesCtx); err != nil {
+				if err := r.validator.UpdateDuties(dutiesCtx); err != nil {
 					handleAssignmentError(err, slot)
 					dutiesCancel()
 					span.End()
@@ -105,19 +127,19 @@ func run(ctx context.Context, v iface.Validator) {
 			// call push proposer settings often to account for the following edge cases:
 			// proposer is activated at the start of epoch and tries to propose immediately
 			// account has changed in the middle of an epoch
-			if err := v.PushProposerSettings(slotCtx, slot, false); err != nil {
+			if err := r.validator.PushProposerSettings(slotCtx, slot, false); err != nil {
 				log.WithError(err).Warn("Failed to update proposer settings")
 			}
 
 			// Start fetching domain data for the next epoch.
 			if slots.IsEpochEnd(slot) {
 				domainCtx, _ := context.WithDeadline(ctx, deadline)
-				go v.UpdateDomainDataCaches(domainCtx, slot+1)
+				go r.validator.UpdateDomainDataCaches(domainCtx, slot+1)
 			}
 
 			var wg sync.WaitGroup
 
-			allRoles, err := v.RolesAt(slotCtx, slot)
+			allRoles, err := r.validator.RolesAt(slotCtx, slot)
 			if err != nil {
 				log.WithError(err).Error("Could not get validator roles")
 				span.End()
@@ -127,10 +149,10 @@ func run(ctx context.Context, v iface.Validator) {
 			cancel()
 			// performRoles calls span.End()
 			rolesCtx, _ := context.WithDeadline(ctx, deadline)
-			performRoles(rolesCtx, allRoles, v, slot, &wg, span)
+			performRoles(rolesCtx, allRoles, r.validator, slot, &wg, span)
 		case isHealthyAgain := <-healthTracker.HealthUpdates():
 			if isHealthyAgain {
-				headSlot, err = initializeValidatorAndGetHeadSlot(ctx, v)
+				headSlot, err := initializeValidatorAndGetHeadSlot(ctx, r.validator)
 				if err != nil {
 					log.WithError(err).Error("Failed to re initialize validator and get head slot")
 					continue
@@ -140,9 +162,9 @@ func run(ctx context.Context, v iface.Validator) {
 					log.WithError(err).Error("Failed to get epoch start")
 					continue
 				}
-				deadline := v.SlotDeadline(ss + params.BeaconConfig().SlotsPerEpoch - 1)
+				deadline := r.validator.SlotDeadline(ss + params.BeaconConfig().SlotsPerEpoch - 1)
 				dutiesCtx, dutiesCancel := context.WithDeadline(ctx, deadline)
-				if err := v.UpdateDuties(dutiesCtx); err != nil {
+				if err := r.validator.UpdateDuties(dutiesCtx); err != nil {
 					handleAssignmentError(err, headSlot)
 					dutiesCancel()
 					continue
@@ -150,11 +172,31 @@ func run(ctx context.Context, v iface.Validator) {
 				dutiesCancel()
 			}
 		case e := <-eventsChan:
-			v.ProcessEvent(ctx, e)
-		case currentKeys := <-v.AccountsChangedChan(): // should be less of a priority than next slot
-			onAccountsChanged(ctx, v, currentKeys)
+			r.validator.ProcessEvent(ctx, e)
+		case currentKeys := <-r.validator.AccountsChangedChan(): // should be less of a priority than next slot
+			onAccountsChanged(ctx, r.validator, currentKeys)
 		}
 	}
+}
+
+// Run the main validator routine. This routine exits if the context is
+// canceled.
+//
+// Order of operations:
+// 1 - Initialize validator data
+// 2 - Wait for validator activation
+// 3 - Wait for the next slot start
+// 4 - Update assignments
+// 5 - Determine role at current slot
+// 6 - Perform assigned role, if any
+func run(ctx context.Context, v iface.Validator) {
+	r, err := newRunner(ctx, v)
+	if err != nil {
+		// If initialization failed, we need to call Done() before returning
+		v.Done()
+		log.WithError(err).Fatal("Failed to initialize runner")
+	}
+	r.run(ctx)
 }
 
 func onAccountsChanged(ctx context.Context, v iface.Validator, current [][48]byte) {
