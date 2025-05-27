@@ -226,7 +226,16 @@ func (v *ValidatorService) Start() {
 	}
 
 	v.validator = valStruct
-	go run(v.ctx, v.validator)
+	
+	// Start the validator routine and wait for it to exit
+	done := run(v.ctx, v.validator)
+	go func() {
+		<-done
+		// Validator routine has exited, call Done() for cleanup
+		if v.validator != nil {
+			v.validator.Done()
+		}
+	}()
 }
 
 // Stop the validator service.

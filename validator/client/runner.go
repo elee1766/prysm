@@ -76,14 +76,18 @@ func newRunner(ctx context.Context, v iface.Validator) (*runner, error) {
 }
 
 // run executes the main validator routine. This routine exits if the context is
-// canceled.
+// canceled. It returns a channel that will be closed when the routine exits.
 //
 // Order of operations:
 // 1 - Wait for the next slot start
 // 2 - Update assignments if needed
 // 3 - Determine role at current slot
 // 4 - Perform assigned role, if any
-func (r *runner) run(ctx context.Context) {
+func (r *runner) run(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	
+	go func() {
+		defer close(done)
 	cleanup := r.validator.Done
 	defer cleanup()
 	
@@ -179,10 +183,13 @@ func (r *runner) run(ctx context.Context) {
 			onAccountsChanged(ctx, r.validator, currentKeys)
 		}
 	}
+	}()
+	
+	return done
 }
 
 // Run the main validator routine. This routine exits if the context is
-// canceled.
+// canceled. It returns a channel that will be closed when the routine exits.
 //
 // Order of operations:
 // 1 - Initialize validator data
@@ -191,14 +198,13 @@ func (r *runner) run(ctx context.Context) {
 // 4 - Update assignments
 // 5 - Determine role at current slot
 // 6 - Perform assigned role, if any
-func run(ctx context.Context, v iface.Validator) {
+func run(ctx context.Context, v iface.Validator) <-chan struct{} {
 	r, err := newRunner(ctx, v)
 	if err != nil {
-		// If initialization failed, we need to call Done() before returning
-		v.Done()
+		// newRunner already calls v.Done() on error
 		log.WithError(err).Fatal("Failed to initialize runner")
 	}
-	r.run(ctx)
+	return r.run(ctx)
 }
 
 func onAccountsChanged(ctx context.Context, v iface.Validator, current [][48]byte) {

@@ -37,7 +37,7 @@ func TestCancelledContext_CleansUpValidator(t *testing.T) {
 		Km:      &mockKeymanager{accountsChangedFeed: &event.Feed{}},
 		Tracker: tracker,
 	}
-	run(cancelledContext(), v)
+	<-run(cancelledContext(), v)
 	assert.Equal(t, true, v.DoneCalled, "Expected Done() to be called")
 }
 
@@ -50,7 +50,7 @@ func TestCancelledContext_WaitsForChainStart(t *testing.T) {
 		Km:      &mockKeymanager{accountsChangedFeed: &event.Feed{}},
 		Tracker: tracker,
 	}
-	run(cancelledContext(), v)
+	<-run(cancelledContext(), v)
 	assert.Equal(t, 1, v.WaitForChainStartCalled, "Expected WaitForChainStart() to be called")
 }
 
@@ -89,7 +89,7 @@ func TestCancelledContext_WaitsForActivation(t *testing.T) {
 		Km:      &mockKeymanager{accountsChangedFeed: &event.Feed{}},
 		Tracker: tracker,
 	}
-	run(cancelledContext(), v)
+	<-run(cancelledContext(), v)
 	assert.Equal(t, 1, v.WaitForActivationCalled, "Expected WaitForActivation() to be called")
 }
 
@@ -113,7 +113,7 @@ func TestUpdateDuties_NextSlot(t *testing.T) {
 		cancel()
 	}()
 
-	run(ctx, v)
+	<-run(ctx, v)
 
 	require.Equal(t, true, v.UpdateDutiesCalled, "Expected UpdateAssignments(%d) to be called", slot)
 }
@@ -140,7 +140,7 @@ func TestUpdateDuties_HandlesError(t *testing.T) {
 	}()
 	v.UpdateDutiesRet = errors.New("bad")
 
-	run(ctx, v)
+	<-run(ctx, v)
 
 	require.LogsContain(t, hook, "Failed to update assignments")
 }
@@ -165,7 +165,7 @@ func TestRoleAt_NextSlot(t *testing.T) {
 		cancel()
 	}()
 
-	run(ctx, v)
+	<-run(ctx, v)
 
 	require.Equal(t, true, v.RoleAtCalled, "Expected RoleAt(%d) to be called", slot)
 	assert.Equal(t, uint64(slot), v.RoleAtArg1, "RoleAt called with the wrong arg")
@@ -192,7 +192,7 @@ func TestAttests_NextSlot(t *testing.T) {
 
 		cancel()
 	}()
-	run(ctx, v)
+	<-run(ctx, v)
 	<-attSubmitted
 	require.Equal(t, true, v.AttestToBlockHeadCalled, "SubmitAttestation(%d) was not called", slot)
 	assert.Equal(t, uint64(slot), v.AttestToBlockHeadArg1, "SubmitAttestation was called with wrong arg")
@@ -219,7 +219,7 @@ func TestProposes_NextSlot(t *testing.T) {
 
 		cancel()
 	}()
-	run(ctx, v)
+	<-run(ctx, v)
 	<-blockProposed
 
 	require.Equal(t, true, v.ProposeBlockCalled, "ProposeBlock(%d) was not called", slot)
@@ -248,7 +248,7 @@ func TestBothProposesAndAttests_NextSlot(t *testing.T) {
 
 		cancel()
 	}()
-	run(ctx, v)
+	<-run(ctx, v)
 	<-blockProposed
 	<-attSubmitted
 	require.Equal(t, true, v.AttestToBlockHeadCalled, "SubmitAttestation(%d) was not called", slot)
@@ -329,7 +329,7 @@ func TestUpdateProposerSettingsAt_EpochStart(t *testing.T) {
 		cancel()
 	}()
 
-	run(ctx, v)
+	<-run(ctx, v)
 	assert.LogsContain(t, hook, "updated proposer settings")
 }
 
@@ -362,7 +362,7 @@ func TestUpdateProposerSettingsAt_EpochEndOk(t *testing.T) {
 		cancel()
 	}()
 
-	run(ctx, v)
+	<-run(ctx, v)
 	// can't test "Failed to update proposer settings" because of log.fatal
 	assert.LogsContain(t, hook, "Mock updated proposer settings")
 }
