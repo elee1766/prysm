@@ -40,6 +40,7 @@ func newRunner(ctx context.Context, v iface.Validator) (*runner, error) {
 	// Initialize validator and get head slot
 	headSlot, err := initializeValidatorAndGetHeadSlot(ctx, v)
 	if err != nil {
+		v.Done()
 		return nil, err
 	}
 	
@@ -65,6 +66,7 @@ func newRunner(ctx context.Context, v iface.Validator) (*runner, error) {
 			" and will continue to use settings provided in the beacon node.")
 	}
 	if err := v.PushProposerSettings(ctx, headSlot, true); err != nil {
+		v.Done()
 		return nil, errors.Wrap(err, "failed to update proposer settings")
 	}
 	
